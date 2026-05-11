@@ -1,0 +1,14 @@
+{
+  "name": "vitl-test",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "mint": "node scripts/mint-jwt.js",
+    "verify": "node scripts/verify.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "jose": "^5.9.6"
+  }
+}

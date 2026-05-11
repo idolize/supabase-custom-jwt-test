@@ -108,3 +108,105 @@ Build a **minimal, runnable proof of concept** that proves or disproves the cust
 - Exact minimal claim set Supabase accepts for custom roles with asymmetric keys in local dev.
 
 Once this PoC passes acceptance A–D, the approach is **validated for local behavior**; production parity still requires a separate checklist (URL, JWKS, roles, and API settings).
+
+---
+
+## Running this PoC (operator section)
+
+The implemented PoC lives in this repo:
+
+```
+supabase/
+  config.toml                         # api schema exposed; signing_keys_path set
+  signing_keys.json                   # RS256 JWK (gitignored)
+  migrations/2026..._init_api_schema.sql
+  seed.sql
+scripts/
+  mint-jwt.js                         # mint a backend JWT for a given sub
+  verify.js                           # runs all acceptance checks A–D
+package.json
+.env.example
+```
+
+### Prereqs
+
+Docker running, plus `supabase`, `node`, and `pnpm` on PATH.
+
+### Cold-start
+
+```bash
+# 1. Install Node deps
+pnpm install
+
+# 2. Generate an RS256 signing key (if you don't already have one).
+#    The CLI prints a single JWK; we wrap it in a JSON array — that's the
+#    format the CLI's signing_keys_path expects.
+supabase gen signing-key --algorithm RS256 --yes \
+  | head -1 \
+  | python3 -c "import sys, json; k=json.load(sys.stdin); json.dump([k], open('supabase/signing_keys.json','w'), indent=2)"
+
+# 3. Bring up the local stack (applies migrations + seed.sql).
+supabase start
+
+# 4. Copy env (defaults are fine for the PoC).
+cp .env.example .env
+
+# 5. Run the acceptance harness.
+pnpm verify
+```
+
+Expected output (all 9 checks PASS):
+
+```
+PASS  A1: backend JWT for user A returns only A's rows
+PASS  A2: backend JWT for user A can insert + then delete its own row
+PASS  A3: backend JWT for user A CANNOT insert a row for user B (RLS WITH CHECK)
+PASS  B1: anon JWT cannot read api.notes (no USAGE on schema)
+PASS  B2: anon cannot call locked-down RPC public.backend_only_ping
+PASS  B3: normal authenticated user JWT cannot read api.notes
+PASS  B4: normal authenticated user JWT cannot call backend_only_ping
+PASS  C1: switching JWT sub from A to B changes visible rows
+PASS  C2: orphan row is invisible to both A and B
+
+All checks passed.
+```
+
+### Mint a JWT by hand
+
+```bash
+# user A
+pnpm mint 00000000-0000-0000-0000-0000000000aa
+
+# Use it against PostgREST. Both Accept-Profile and Content-Profile must be
+# set to `api` because the api schema is not the default.
+TOKEN=$(pnpm -s mint 00000000-0000-0000-0000-0000000000aa)
+ANON_KEY=$(supabase status -o env | sed -n 's/^ANON_KEY="\(.*\)"$/\1/p')
+
+curl -s "http://127.0.0.1:54321/rest/v1/notes?select=*" \
+  -H "apikey: $ANON_KEY" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Accept-Profile: api"
+# => only rows where user_id = 0000...00aa
+```
+
+Same request with an `anon`-role JWT (`-H "Authorization: Bearer $ANON_KEY"`) returns `{"code":"42501",...}` or a `permission denied`-shaped error — no rows leak.
+
+### How the pieces fit together
+
+- **`supabase/config.toml`** adds `api` to `[api].schemas`, so PostgREST serves it via `Accept-Profile: api`. It also sets `[auth].signing_keys_path = "./signing_keys.json"`, so GoTrue (and therefore PostgREST via JWKS) verifies tokens signed with that RS256 key.
+- **Migration** creates the `nodejs_backend` role, grants `nodejs_backend` to `authenticator` (so PostgREST can `SET LOCAL ROLE nodejs_backend` based on the JWT `role` claim), creates schema `api` with `USAGE` granted _only_ to `nodejs_backend`, and creates `api.notes` with `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY`. Policies are scoped `to nodejs_backend` and use `user_id = auth.uid()`.
+- **`auth.uid()`** is the supplied Supabase helper that returns `current_setting('request.jwt.claim.sub')::uuid` — i.e. the `sub` claim of whatever JWT PostgREST verified for this request. That is the exact mechanism that lets a backend-minted JWT impersonate a user inside RLS.
+- **`scripts/mint-jwt.js`** loads `supabase/signing_keys.json`, picks the active JWK, and signs an RS256 JWT with header `{kid, alg:RS256, typ:JWT}` and payload `{iss, aud:"authenticated", sub, role:"nodejs_backend", iat, exp}`.
+
+### Behaviour that's worth noting (answers to README's open questions)
+
+- **Does PostgREST expose only intended schemas?** Yes. With `[api].schemas = ["public","graphql_public","api"]`, requests against `api` require `Accept-Profile: api`. Even when reachable, the schema is locked because `anon`/`authenticated` have no `USAGE` grant.
+- **Default grants on `public`?** The PoC's `public` schema only contains `backend_only_ping()`, whose `EXECUTE` is revoked from `public` and from `anon`/`authenticated`. Any future tables added to `public` should explicitly `grant`/`revoke`. The seeded `api.notes` is in a private schema, so the default `public` grant is irrelevant for the protected data.
+- **Minimal claim set for asymmetric local dev:** `kid` (header) + `alg: RS256` (header) + `sub` (uuid) + `role: nodejs_backend` (must match the Postgres role) + `aud: "authenticated"` + `exp`. `iat` is conventional; `iss` is included for parity with hosted but local PostgREST does not strictly validate it (the locally-printed anon/service JWTs use `iss: "supabase-demo"`, while real GoTrue-issued tokens use the full URL form — both verify).
+
+### Known limitations
+
+- GraphQL is also exposed by default (`/graphql/v1`). Tables in `api` are not reachable via the GraphQL endpoint because that endpoint runs as `anon`/`authenticated` and they have no `USAGE` on `api`. If you ever add `api` to the GraphQL exposed schemas, you must re-do this analysis.
+- The Storage and Realtime APIs are not addressed here. If you store user-owned data in Storage, mirror the same RLS pattern on `storage.objects`.
+- This PoC does NOT replace Supabase Auth — your backend is still responsible for verifying the user's session (e.g. via `auth.getUser()` server-side with the user's cookie) before minting a backend JWT for that `sub`. The backend JWT is a capability token; mint it short-lived (default 5 min here) and only after you've verified the requesting user.
+- For production: rotate the RS256 keypair via Supabase's signing-key rotation (a second JWK with `status: "standby"`, then promoted), keep the private key out of the Node process where possible (KMS/HSM), and consider an explicit `iss` check in any custom verification path.

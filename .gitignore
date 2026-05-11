@@ -1,0 +1,6 @@
+node_modules/
+.env
+.env.local
+supabase/signing_keys.json
+supabase/.temp/
+.DS_Store
