@@ -1,5 +1,5 @@
 {
-  "name": "vitl-test",
+  "name": "supabase-custom-jwt-test",
   "version": "0.0.0",
   "private": true,
   "type": "module",
