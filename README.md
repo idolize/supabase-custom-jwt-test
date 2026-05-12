@@ -78,6 +78,22 @@ pnpm verify
 
 You should see **nine** passing checks ending with `All checks passed.` (see [Verification](#verification) below).
 
+```text
+PostgREST URL: http://127.0.0.1:54321
+
+PASS  A1: backend JWT for user A returns only A's rows
+PASS  A2: backend JWT for user A can insert + then delete its own row
+PASS  A3: backend JWT for user A CANNOT insert a row for user B (RLS WITH CHECK)
+PASS  B1: anon JWT cannot read api.notes (no USAGE on schema)
+PASS  B2: anon cannot call locked-down RPC public.backend_only_ping
+PASS  B3: normal authenticated user JWT cannot read api.notes
+PASS  B4: normal authenticated user JWT cannot call backend_only_ping
+PASS  C1: switching JWT sub from A to B changes visible rows
+PASS  C2: orphan row is invisible to both A and B
+
+All checks passed.
+```
+
 REST base URL for PostgREST is typically `http://127.0.0.1:54321/rest/v1` (shown in `supabase status`).
 
 ---
