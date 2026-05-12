@@ -15,7 +15,8 @@ import path from "node:path";
 import "dotenv/config";
 import { SignJWT, importJWK } from "jose";
 
-const KEYS_PATH = process.env.SUPABASE_SIGNING_KEYS_PATH ?? "./supabase/signing_keys.json";
+const KEYS_PATH =
+  process.env.SUPABASE_SIGNING_KEYS_PATH ?? "./supabase/signing_keys.json";
 const ISS = process.env.SUPABASE_JWT_ISS ?? "http://127.0.0.1:54321/auth/v1";
 
 async function loadActivePrivateKey() {
@@ -28,13 +29,19 @@ async function loadActivePrivateKey() {
   // tagged as in_use if present (matches Supabase's hosted format).
   const jwk = keys.find((k) => k.status === "in_use")?.key ?? keys[0];
   if (jwk.alg !== "RS256") {
-    throw new Error(`Expected RS256 JWK, got alg=${jwk.alg}. Regenerate with --algorithm RS256.`);
+    throw new Error(
+      `Expected RS256 JWK, got alg=${jwk.alg}. Regenerate with --algorithm RS256.`,
+    );
   }
   const privateKey = await importJWK(jwk, "RS256");
   return { jwk, privateKey };
 }
 
-export async function mintBackendJwt({ sub, role = "nodejs_backend", ttlSeconds = 300 }) {
+export async function mintBackendJwt({
+  sub,
+  role = "nodejs_backend",
+  ttlSeconds = 300,
+}) {
   if (!sub) throw new Error("sub (user UUID) is required");
   const { jwk, privateKey } = await loadActivePrivateKey();
   const now = Math.floor(Date.now() / 1000);
@@ -53,7 +60,9 @@ const isMain = import.meta.url === `file://${process.argv[1]}`;
 if (isMain) {
   const [, , sub, role, ttl] = process.argv;
   if (!sub) {
-    console.error("Usage: node scripts/mint-jwt.js <sub-uuid> [role] [ttl-seconds]");
+    console.error(
+      "Usage: node scripts/mint-jwt.js <sub-uuid> [role] [ttl-seconds]",
+    );
     process.exit(1);
   }
   const token = await mintBackendJwt({

@@ -8,6 +8,7 @@
     "verify": "node scripts/verify.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
     "dotenv": "^16.4.5",
     "jose": "^5.9.6"
   }
